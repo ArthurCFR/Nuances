@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+
+# Build
+.next/
+out/
+build/
+dist/
+
+# Env
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+*:Zone.Identifier
+
+# Large data files
+*.txt
+*.zip
+
+# ICC profiles
+icc_profiles/
+
+# Images at root
+/*.jpg
+/*.png
+/*.avif
+/*.ai
+
+# Unused assets
+public/signature.pdf
+public/interiors/
+
+# Generated files (except monochrome HQ webp)
+public/generated/*
+!public/generated/*_hq.webp
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
