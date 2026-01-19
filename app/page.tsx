@@ -1,7 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback, useEffect } from 'react';
-import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 
 // Composant pour souligner le S
 const UnderlineS = ({ children }: { children: string }) => {
@@ -210,6 +209,9 @@ const SPECTRUM_PREGENERATED: GenerationResult = {
 };
 
 export default function Home() {
+  // Splash screen state
+  const [isLoading, setIsLoading] = useState(true);
+
   // Tab state
   const [activeTab, setActiveTab] = useState<TabKey>('monochromes');
 
@@ -265,8 +267,8 @@ export default function Home() {
   const bisTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Monochromes animation state
-  const [monoZoomScale, setMonoZoomScale] = useState(25);
   const [monoAnimationStarted, setMonoAnimationStarted] = useState(false);
+  const [monoKey, setMonoKey] = useState(0); // Force le remontage complet au changement de couleur
   const [monoImageLoaded, setMonoImageLoaded] = useState(false);
   const [monoDisplayCount, setMonoDisplayCount] = useState(0);
   const [monoPrefix, setMonoPrefix] = useState(''); // "Les " apparaît lettre par lettre
@@ -365,6 +367,38 @@ export default function Home() {
     };
   }, [hdModalOpen, infoPage]);
 
+  // Précharger les images et gérer le splash screen
+  useEffect(() => {
+    let bleuLoaded = false;
+    let minTimeElapsed = false;
+
+    const checkReady = () => {
+      if (bleuLoaded && minTimeElapsed) {
+        setIsLoading(false);
+      }
+    };
+
+    // Charger l'image bleue en priorité (première affichée)
+    const bleuImg = new Image();
+    bleuImg.onload = () => {
+      bleuLoaded = true;
+      checkReady();
+    };
+    bleuImg.src = '/generated/bleu_hq.webp';
+
+    // Précharger les autres en arrière-plan
+    COLORS.filter(c => c.key !== 'bleu').forEach(({ key }) => {
+      const img = new Image();
+      img.src = `/generated/${key}_hq.webp`;
+    });
+
+    // Minimum 2 secondes de splash
+    setTimeout(() => {
+      minTimeElapsed = true;
+      checkReady();
+    }, 2000);
+  }, []);
+
   // Animation dezoom pour Monochromes bis
   const startBisAnimation = useCallback(() => {
     const startTime = Date.now();
@@ -390,33 +424,30 @@ export default function Home() {
     bisAnimationRef.current = requestAnimationFrame(animate);
   }, []);
 
-  // Animation dezoom pour Monochromes (avec compteur animé depuis le nombre de mots)
+  // Animation compteur pour Monochromes (le dezoom est en CSS)
   const startMonoAnimation = useCallback((targetCount: number, startCount: number = 0, colorToAnimate: ColorKey) => {
     const startTime = Date.now();
-    const duration = 4000; // 4 secondes pour le dezoom
-    const startScale = 25;
-    const endScale = 1;
+    const duration = 4000;
+    let lastUpdateTime = 0;
 
     const animate = () => {
-      const elapsed = Date.now() - startTime;
+      const now = Date.now();
+      const elapsed = now - startTime;
       const progress = Math.min(elapsed / duration, 1);
 
-      // Easing out cubic pour un dezoom fluide
-      const easeOut = 1 - Math.pow(1 - progress, 3);
-      const currentScale = startScale - (startScale - endScale) * easeOut;
-
-      setMonoZoomScale(currentScale);
-      // Animer le compteur depuis startCount jusqu'à targetCount
-      const countProgress = startCount + (targetCount - startCount) * easeOut;
-      setMonoDisplayCount(Math.floor(countProgress));
+      // Throttle: mise à jour max 30fps au lieu de 60
+      if (now - lastUpdateTime >= 33) {
+        lastUpdateTime = now;
+        const easeOut = 1 - Math.pow(1 - progress, 3);
+        const countProgress = startCount + (targetCount - startCount) * easeOut;
+        setMonoDisplayCount(Math.floor(countProgress));
+      }
 
       if (progress < 1) {
         monoAnimationRef.current = requestAnimationFrame(animate);
       } else {
-        // Animation terminée - cacher les dots et afficher la valeur finale
         setMonoDisplayCount(targetCount);
         setShowWordCloudDots(false);
-        // Marquer cette couleur comme animée pour cette session
         setAnimatedColors(prev => new Set(prev).add(colorToAnimate));
       }
     };
@@ -460,19 +491,20 @@ export default function Home() {
     // L'image est toujours dans le DOM et a 6s pour charger pendant le nuage de mots
     // Ne pas animer si cette couleur a déjà été animée pendant cette session
     if (activeTab === 'monochromes' && wordCloudReady && !monoAnimationStarted && colorData && !animatedColors.has(selectedColor)) {
-      // Étape 1: Cacher les mots (fade out 0.8s)
+      // Étape 1: Cacher les mots (fade out rapide)
       setShowWordCloud(false);
 
-      // Étape 2: Après que les mots aient disparu, révéler l'image HD
+      // Étape 2: Révéler l'image HD (fade in 0.6s)
       monoRevealTimeoutRef.current = setTimeout(() => {
         setShowHdImage(true);
-      }, 1000); // 0.8s fade + 0.2s buffer
+      }, 400);
 
-      // Étape 3: Après révélation de l'image + 0.8s d'attente, lancer le dezoom
+      // Étape 3: Lancer le dezoom après fade complet + 0.5s de pause
+      // 400ms (attente) + 600ms (fade in) + 500ms (pause) = 1500ms
       monoDezoomTimeoutRef.current = setTimeout(() => {
         setMonoAnimationStarted(true);
         startMonoAnimation(colorData.count, wordCount, selectedColor);
-      }, 1800); // 1000ms + 800ms d'attente
+      }, 1500);
 
       return () => {
         if (monoRevealTimeoutRef.current) clearTimeout(monoRevealTimeoutRef.current);
@@ -487,9 +519,9 @@ export default function Home() {
   useEffect(() => {
     if (activeTab === 'monochromes' && showWordCloud && !wordCloudReady && !animatedColors.has(selectedColor)) {
       const wordCount = COLOR_NAMES[selectedColor]?.length || 0;
-      const wordInterval = 400; // ms entre chaque mot
-      const totalDuration = 6000; // durée totale du nuage
-      const initialDelay = 1000; // 1 seconde d'attente avant de commencer
+      const wordInterval = 350; // ms entre chaque mot (plus rapide)
+      const totalDuration = 4000; // durée totale du nuage (réduite)
+      const initialDelay = 500; // délai initial réduit
       let startTime: number;
       let lastWordIndex = 0;
       let rafId: number;
@@ -566,19 +598,18 @@ export default function Home() {
         setWordCloudStarted(true);
         setWordCloudReady(true);
         setShowHdImage(true);
-        setMonoZoomScale(1);
         setMonoAnimationStarted(true);
         setMonoImageLoaded(true);
         setMonoDisplayCount(colorData.count);
         setMonoPrefix('Les');
       } else {
-        // Reset complet - retour à l'écran blanc avec compteur à 0
+        // Reset complet avec nouvelle clé pour forcer le remontage
+        setMonoKey(k => k + 1);
         setShowWordCloud(true);
         setShowWordCloudDots(true);
         setWordCloudStarted(false);
         setWordCloudReady(false);
         setShowHdImage(false);
-        setMonoZoomScale(25);
         setMonoAnimationStarted(false);
         setMonoImageLoaded(false);
         setMonoDisplayCount(0);
@@ -592,13 +623,11 @@ export default function Home() {
   useEffect(() => {
     if (activeTab !== 'monochromes') {
       clearAllMonoTimeouts();
-
       setShowWordCloud(true);
       setShowWordCloudDots(true);
       setWordCloudStarted(false);
       setWordCloudReady(false);
       setShowHdImage(false);
-      setMonoZoomScale(25);
       setMonoAnimationStarted(false);
       setMonoImageLoaded(false);
       setMonoDisplayCount(0);
@@ -972,72 +1001,52 @@ export default function Home() {
     }
   };
 
-  // Fonction pour mélanger les couleurs de fond (Rencontres)
-  const mixColors = (colors: ColorKey[]): string => {
-    if (colors.length === 0) return PALETTE_BG;
-    if (colors.length === 1) return TINTS[colors[0]];
-
-    // Convertir les hex en RGB, faire la moyenne, reconvertir
-    const rgbColors = colors.map((c) => {
-      const hex = TINTS[c].replace('#', '');
-      return {
-        r: parseInt(hex.slice(0, 2), 16),
-        g: parseInt(hex.slice(2, 4), 16),
-        b: parseInt(hex.slice(4, 6), 16),
-      };
-    });
-
-    const avg = {
-      r: Math.round(rgbColors.reduce((s, c) => s + c.r, 0) / rgbColors.length),
-      g: Math.round(rgbColors.reduce((s, c) => s + c.g, 0) / rgbColors.length),
-      b: Math.round(rgbColors.reduce((s, c) => s + c.b, 0) / rgbColors.length),
-    };
-
-    return `rgb(${avg.r}, ${avg.g}, ${avg.b})`;
-  };
-
-  const getBgColor = () => {
-    if (activeTab === 'spectrum') {
-      return SPECTRUM_BG;
-    }
-    if (activeTab === 'galerie') {
-      return '#f5f5f0'; // Fond neutre pour la galerie
-    }
+  // Mémorise la couleur de fond pour éviter les recalculs
+  const bgColor = useMemo(() => {
+    if (activeTab === 'spectrum') return SPECTRUM_BG;
+    if (activeTab === 'galerie') return '#f5f5f0';
     if (activeTab === 'rencontres') {
-      if (selectedPaletteColors.size > 0) {
-        return mixColors(Array.from(selectedPaletteColors));
-      }
-      return PALETTE_BG;
+      if (selectedPaletteColors.size === 0) return PALETTE_BG;
+      if (selectedPaletteColors.size === 1) return TINTS[Array.from(selectedPaletteColors)[0]];
+      // Mélange des couleurs
+      const colors = Array.from(selectedPaletteColors);
+      const rgbColors = colors.map((c) => {
+        const hex = TINTS[c].replace('#', '');
+        return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
+      });
+      const avg = rgbColors.reduce((a, c) => [a[0] + c[0], a[1] + c[1], a[2] + c[2]], [0, 0, 0]);
+      return `rgb(${Math.round(avg[0] / colors.length)}, ${Math.round(avg[1] / colors.length)}, ${Math.round(avg[2] / colors.length)})`;
     }
     if (activeTab === 'rencontrescrop') {
-      if (selectedCropColors.size > 0) {
-        return mixColors(Array.from(selectedCropColors));
-      }
-      return PALETTE_BG;
+      if (selectedCropColors.size === 0) return PALETTE_BG;
+      if (selectedCropColors.size === 1) return TINTS[Array.from(selectedCropColors)[0]];
+      const colors = Array.from(selectedCropColors);
+      const rgbColors = colors.map((c) => {
+        const hex = TINTS[c].replace('#', '');
+        return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)];
+      });
+      const avg = rgbColors.reduce((a, c) => [a[0] + c[0], a[1] + c[1], a[2] + c[2]], [0, 0, 0]);
+      return `rgb(${Math.round(avg[0] / colors.length)}, ${Math.round(avg[1] / colors.length)}, ${Math.round(avg[2] / colors.length)})`;
     }
-    if (activeTab === 'monochromesbis') {
-      return TINTS.bleu; // Pour l'instant, toujours bleu
-    }
+    if (activeTab === 'monochromesbis') return TINTS.bleu;
     return TINTS[selectedColor];
-  };
+  }, [activeTab, selectedColor, selectedPaletteColors, selectedCropColors]);
 
-  // Données de la couleur sélectionnée
-  const selectedColorData = COLOR_DATA[selectedColor];
+  // Données mémorisées
+  const selectedColorData = useMemo(() => COLOR_DATA[selectedColor], [selectedColor]);
   const currentError = activeTab === 'rencontres' ? paletteError : activeTab === 'rencontrescrop' ? cropError : null;
 
+  // Splash screen
+  if (isLoading) {
+    return (
+      <div className="splash-screen">
+        <h1 className="splash-title">NUANCE<span className="underline-s">S</span></h1>
+      </div>
+    );
+  }
+
   return (
-    <main
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        padding: '60px 24px',
-        backgroundColor: getBgColor(),
-        transition: 'background-color 1.2s cubic-bezier(0.4, 0, 0.2, 1)',
-        position: 'relative',
-      }}
-    >
+    <main className="main-container" style={{ backgroundColor: bgColor }}>
       {/* Navigation */}
       <nav className="info-nav">
         <button onClick={() => setInfoPage('demarche')} className="info-nav-link">
@@ -1065,7 +1074,7 @@ export default function Home() {
       </header>
 
       {/* Tabs */}
-      <div className="tabs" style={{ marginBottom: '40px' }}>
+      <div className="tabs tabs-spaced">
         <button
           className={`tab ${activeTab === 'monochromes' ? 'active' : ''}`}
           onClick={() => setActiveTab('monochromes')}
@@ -1090,156 +1099,52 @@ export default function Home() {
       {activeTab === 'monochromes' && (
         <div
           className="frame-container"
-          style={{ width: '100%', maxWidth: '520px', marginBottom: '40px' }}
-        >
-          <div className="frame-inner" style={{ overflow: 'hidden', position: 'relative' }}>
+                  >
+          <div className="frame-inner frame-relative">
             {selectedColorData?.full ? (
-              <>
-                {/* Image HD avec fade in lent et dezoom */}
+              /* Clé unique force le remontage complet au changement de couleur */
+              <div key={`mono-${selectedColor}-${monoKey}`} style={{ position: 'absolute', inset: 0 }}>
+                {/* Image HD */}
                 <img
-                  key={selectedColor}
                   src={`/generated/${selectedColor}_hq.webp`}
                   alt={`Nuage ${selectedColor}`}
                   onLoad={() => setMonoImageLoaded(true)}
-                  style={{
-                    transform: `scale(${monoZoomScale}) translateZ(0)`,
-                    transformOrigin: '50% 50%',
-                    willChange: 'transform',
-                    opacity: showHdImage ? 1 : 0,
-                    transition: 'opacity 1.5s ease',
-                  }}
+                  className={`mono-hd-image ${monoAnimationStarted ? 'animating' : ''} ${showHdImage ? 'visible' : ''}`}
                 />
 
-                {/* Fond blanc pendant le nuage de mots (disparaît quand l'image HD apparaît) */}
-                <div
-                  style={{
-                    position: 'absolute',
-                    inset: 0,
-                    backgroundColor: 'white',
-                    opacity: showHdImage ? 0 : 1,
-                    transition: 'opacity 1.5s ease',
-                    zIndex: 1,
-                  }}
-                />
+                {/* Fond blanc pendant le nuage de mots */}
+                <div className={`mono-white-overlay ${showHdImage ? 'hidden' : ''}`} />
 
-                {/* Mots et pixels du nuage - positions semi-aléatoires centrées */}
-                {(() => {
-                  // Positions centrées avec distribution équilibrée (moyenne ~50% sur les deux axes)
-                  const positions = [
-                    { x: 28, y: 18 }, { x: 68, y: 15 },
-                    { x: 22, y: 40 }, { x: 58, y: 36 }, { x: 78, y: 45 },
-                    { x: 32, y: 62 }, { x: 72, y: 58 },
-                    { x: 25, y: 82 }, { x: 65, y: 78 }, { x: 48, y: 50 },
-                  ];
-                  // Octogone avec petits côtés légèrement plus grands (35%/65% au lieu de 40%/60%)
-                  const octagonClipPath = 'polygon(35% 0%, 65% 0%, 100% 35%, 100% 65%, 65% 100%, 35% 100%, 0% 65%, 0% 35%)';
+                {/* Nuage de mots et pixels */}
+                {showWordCloudDots && wordCloudStarted && (
+                  <div className={`word-cloud-pixels ${monoAnimationStarted ? 'animating' : ''}`}>
+                    {COLOR_NAMES[selectedColor].map((colorName, index) => (
+                      <div
+                        key={`dot-${colorName.name}`}
+                        className="word-cloud-pixel"
+                        data-index={index}
+                        style={{ '--color': colorName.hex } as React.CSSProperties}
+                      />
+                    ))}
+                  </div>
+                )}
 
-                  return (
-                    <>
-                      {/* Pixels - dezoom synchronisé avec l'image HD (scale 1 → 1/25) */}
-                      {showWordCloudDots && wordCloudStarted && (
-                        <div
-                          key={`pixels-${selectedColor}`}
-                          style={{
-                            position: 'absolute',
-                            inset: 0,
-                            pointerEvents: 'none',
-                            zIndex: 2,
-                            // Quand monoZoomScale=25 → scale(1), quand monoZoomScale=1 → scale(0.04)
-                            transform: monoAnimationStarted ? `scale(${monoZoomScale / 25}) translateZ(0)` : 'scale(1)',
-                            transformOrigin: '50% 50%',
-                            willChange: 'transform',
-                          }}
-                        >
-                          {COLOR_NAMES[selectedColor].map((colorName, index) => {
-                            const pos = positions[index % positions.length];
-                            return (
-                              <div
-                                key={`dot-${selectedColor}-${colorName.name}`}
-                                className="word-cloud-pixel"
-                                style={{
-                                  position: 'absolute',
-                                  left: `calc(${pos.x}% - 14px)`,
-                                  top: `calc(${pos.y}% + 8px)`,
-                                  width: '14px',
-                                  height: '14px',
-                                  backgroundColor: colorName.hex,
-                                  clipPath: octagonClipPath,
-                                  animationDelay: `${index * 0.4}s`,
-                                  // transform est géré par l'animation CSS
-                                }}
-                              />
-                            );
-                          })}
-                        </div>
-                      )}
-
-                      {/* Mots (disparaissent en premier avec fade out) */}
-                      {showWordCloud && wordCloudStarted && (
-                        <div
-                          key={`words-${selectedColor}`}
-                          style={{
-                            position: 'absolute',
-                            inset: 0,
-                            pointerEvents: 'none',
-                            zIndex: 3,
-                            opacity: wordCloudReady ? 0 : 1,
-                            transition: 'opacity 0.8s ease-out',
-                          }}
-                        >
-                          {COLOR_NAMES[selectedColor].map((colorName, index) => {
-                            const pos = positions[index % positions.length];
-                            // Convertir hex en RGB
-                            const hex = colorName.hex.replace('#', '');
-                            const r = parseInt(hex.slice(0, 2), 16);
-                            const g = parseInt(hex.slice(2, 4), 16);
-                            const b = parseInt(hex.slice(4, 6), 16);
-                            return (
-                              <div
-                                key={`${selectedColor}-${colorName.name}`}
-                                className="word-cloud-item"
-                                style={{
-                                  position: 'absolute',
-                                  left: `${pos.x}%`,
-                                  top: `${pos.y}%`,
-                                  color: colorName.hex,
-                                  fontFamily: "'Cormorant Garamond', Georgia, serif",
-                                  whiteSpace: 'nowrap',
-                                  animationDelay: `${index * 0.4}s`,
-                                }}
-                              >
-                                <span
-                                  style={{
-                                    fontSize: 'clamp(0.9rem, 2vw, 1.2rem)',
-                                    fontWeight: 400,
-                                    letterSpacing: '0.02em',
-                                    display: 'block',
-                                  }}
-                                >
-                                  {colorName.name}
-                                </span>
-                                <span
-                                  style={{
-                                    fontSize: 'clamp(0.65rem, 1.5vw, 0.9rem)',
-                                    fontStyle: 'italic',
-                                    fontWeight: 300,
-                                    letterSpacing: '0.01em',
-                                    display: 'block',
-                                    marginTop: '2px',
-                                    opacity: 0.85,
-                                  }}
-                                >
-                                  {r}, {g}, {b}
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </>
-                  );
-                })()}
-              </>
+                {showWordCloud && wordCloudStarted && (
+                  <div className={`word-cloud-words ${wordCloudReady ? 'fading' : ''}`}>
+                    {COLOR_NAMES[selectedColor].map((colorName, index) => (
+                      <div
+                        key={colorName.name}
+                        className="word-cloud-item"
+                        data-index={index}
+                        style={{ '--color': colorName.hex } as React.CSSProperties}
+                      >
+                        <span className="word-cloud-name">{colorName.name}</span>
+                        <span className="word-cloud-rgb">{colorName.hex}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             ) : (
               <p className="placeholder-text">
                 Cette couleur n&apos;est pas encore disponible
@@ -1253,8 +1158,7 @@ export default function Home() {
       {activeTab === 'monochromesbis' && (
         <div
           className="frame-container"
-          style={{ width: '100%', maxWidth: '520px', marginBottom: '40px' }}
-        >
+                  >
           <div className="frame-inner" style={{ overflow: 'hidden' }}>
             <img
               src={COLOR_DATA.bleu?.full}
@@ -1274,8 +1178,7 @@ export default function Home() {
       {activeTab === 'spectrum' && (
         <div
           className="frame-container"
-          style={{ width: '100%', maxWidth: '520px', marginBottom: '40px' }}
-        >
+                  >
           <div className="frame-inner">
             <img
               src={SPECTRUM_PREGENERATED.preview}
@@ -1289,8 +1192,7 @@ export default function Home() {
       {activeTab === 'rencontres' && (
         <div
           className="frame-container"
-          style={{ width: '100%', maxWidth: '520px', marginBottom: '40px' }}
-        >
+                  >
           <div className="frame-inner" style={{ position: 'relative' }}>
             {/* Image de l'aperçu (en dessous) */}
             {palettePreview && (
@@ -1355,31 +1257,17 @@ export default function Home() {
                     Sélectionnez vos couleurs
                   </p>
                 ) : (
-                  <LayoutGroup>
-                    <motion.div className="color-names-stack" layout>
-                      <AnimatePresence mode="popLayout">
-                        {Array.from(selectedPaletteColors).map((c) => (
-                          <motion.span
-                            key={c}
-                            layout
-                            initial={{ opacity: 0, y: 10, scale: 0.9 }}
-                            animate={{ opacity: 1, y: 0, scale: 1 }}
-                            exit={{ opacity: 0, scale: 0.9 }}
-                            transition={{
-                              layout: { duration: 0.35, ease: [0.4, 0, 0.2, 1] },
-                              opacity: { duration: 0.25 },
-                              scale: { duration: 0.25 },
-                              y: { duration: 0.3, ease: [0.4, 0, 0.2, 1] }
-                            }}
-                            className="color-name-item-motion"
-                            style={{ color: COLORS.find(col => col.key === c)?.hex }}
-                          >
-                            {COLOR_LABELS_PLURAL[c]}
-                          </motion.span>
-                        ))}
-                      </AnimatePresence>
-                    </motion.div>
-                  </LayoutGroup>
+                  <div className="color-names-stack">
+                    {Array.from(selectedPaletteColors).map((c) => (
+                      <span
+                        key={c}
+                        className="color-name-item"
+                        style={{ color: COLORS.find(col => col.key === c)?.hex }}
+                      >
+                        {COLOR_LABELS_PLURAL[c]}
+                      </span>
+                    ))}
+                  </div>
                 )}
               </div>
             )}
@@ -1391,8 +1279,7 @@ export default function Home() {
       {activeTab === 'rencontrescrop' && (
         <div
           className="frame-container"
-          style={{ width: '100%', maxWidth: '520px', marginBottom: '40px' }}
-        >
+                  >
           <div className="frame-inner" style={{ position: 'relative' }}>
             {/* Image de l'aperçu (en dessous) */}
             {cropPreview && (
@@ -1485,7 +1372,7 @@ export default function Home() {
 
       {/* Title display for Monochromes - compteur visible dès le début */}
       {activeTab === 'monochromes' && selectedColorData && (
-        <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+        <div className="section-title">
           <h2 className="color-title">
             {monoPrefix} {monoDisplayCount.toLocaleString('fr-FR')} <UnderlineS>{COLOR_LABELS_PLURAL[selectedColor]}</UnderlineS>
           </h2>
@@ -1494,7 +1381,7 @@ export default function Home() {
 
       {/* Title display for Monochromes bis */}
       {activeTab === 'monochromesbis' && COLOR_DATA.bleu && (
-        <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+        <div className="section-title">
           <h2 className="color-title">
             {COLOR_DATA.bleu.count.toLocaleString('fr-FR')} <UnderlineS>bleus</UnderlineS>
           </h2>
@@ -1503,7 +1390,7 @@ export default function Home() {
 
       {/* Title display for Spectrum */}
       {activeTab === 'spectrum' && (
-        <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+        <div className="section-title">
           <h2 className="color-title">
             {SPECTRUM_PREGENERATED.count.toLocaleString('fr-FR')} <UnderlineS>nuances</UnderlineS>
           </h2>
@@ -1524,7 +1411,7 @@ export default function Home() {
       )}
 
       {activeTab === 'rencontres' && (isPaletteRevealing || palettePreview) && (
-        <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+        <div className="section-title">
           <h2 className="color-title">
             {paletteCount.toLocaleString('fr-FR')} <UnderlineS>nuances</UnderlineS>
           </h2>
@@ -1532,7 +1419,7 @@ export default function Home() {
       )}
 
       {activeTab === 'rencontrescrop' && (isCropRevealing || cropPreview) && (
-        <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+        <div className="section-title">
           <h2 className="color-title">
             {cropCount.toLocaleString('fr-FR')} <UnderlineS>nuances</UnderlineS>
           </h2>
@@ -1542,7 +1429,7 @@ export default function Home() {
       {/* Controls for Couleurs tab */}
       {activeTab === 'monochromes' && (
         <>
-          <div className="color-selector" style={{ marginBottom: '40px' }}>
+          <div className="color-selector selector-spaced">
             {COLORS.map((color) => (
               <button
                 key={color.key}
@@ -1559,7 +1446,7 @@ export default function Home() {
           </div>
 
           {selectedColorData && (
-            <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', justifyContent: 'center' }}>
+            <div className="btn-group">
               <button
                 className="btn btn-primary"
                 onClick={() => openHdModal(
@@ -1576,7 +1463,7 @@ export default function Home() {
 
       {/* Controls for Monochromes bis */}
       {activeTab === 'monochromesbis' && COLOR_DATA.bleu && (
-        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', justifyContent: 'center' }}>
+        <div className="btn-group">
           <button
             className="btn btn-secondary"
             onClick={() => {
@@ -1609,7 +1496,7 @@ export default function Home() {
       {/* Controls for Palette tab */}
       {activeTab === 'rencontres' && (
         <>
-          <div className="color-selector" style={{ marginBottom: '40px' }}>
+          <div className="color-selector selector-spaced">
             {COLORS.map((color) => (
               <button
                 key={color.key}
@@ -1680,7 +1567,7 @@ export default function Home() {
             </p>
           </div>
 
-          <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', justifyContent: 'center' }}>
+          <div className="btn-group">
             {/* Bouton Générer - visible seulement s'il n'y a pas d'aperçu */}
             {!palettePreview && (
               <button
@@ -1710,7 +1597,7 @@ export default function Home() {
       {/* Controls for Rencontres Crop tab */}
       {activeTab === 'rencontrescrop' && (
         <>
-          <div className="color-selector" style={{ marginBottom: '40px' }}>
+          <div className="color-selector selector-spaced">
             {COLORS.map((color) => (
               <button
                 key={color.key}
@@ -1731,7 +1618,7 @@ export default function Home() {
             {selectedCropColors.size} couleur{selectedCropColors.size > 1 ? 's' : ''} selectionnee{selectedCropColors.size > 1 ? 's' : ''}
           </p>
 
-          <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', justifyContent: 'center' }}>
+          <div className="btn-group">
             {/* Bouton Générer - visible seulement s'il n'y a pas d'aperçu */}
             {!cropPreview && (
               <button
@@ -1760,7 +1647,7 @@ export default function Home() {
 
       {/* Controls for Spectrum tab */}
       {activeTab === 'spectrum' && (
-        <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', justifyContent: 'center' }}>
+        <div className="btn-group">
           <button
             className="btn btn-primary"
             onClick={() => openHdModal(
