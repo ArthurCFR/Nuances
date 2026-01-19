@@ -1041,6 +1041,7 @@ export default function Home() {
     return (
       <div className="splash-screen">
         <h1 className="splash-title">NUANCE<span className="underline-s">S</span></h1>
+        <img src="/jg-causse-signature.png" alt="Jean-Gabriel Causse" className="splash-signature" />
       </div>
     );
   }

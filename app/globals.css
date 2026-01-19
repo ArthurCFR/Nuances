@@ -61,6 +61,7 @@ body {
 .splash-screen {
   min-height: 100vh;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   background-color: var(--bg-primary);
@@ -74,6 +75,14 @@ body {
   text-transform: uppercase;
   color: var(--text-primary);
   animation: splashFadeIn 0.8s ease-out;
+}
+
+.splash-signature {
+  height: clamp(28px, 4vw, 44px);
+  width: auto;
+  opacity: 0.5;
+  margin-top: 24px;
+  animation: splashFadeIn 0.8s ease-out 0.2s backwards;
 }
 
 @keyframes splashFadeIn {
@@ -124,18 +133,19 @@ body {
   position: absolute;
   bottom: -0.08em;
   left: 10%;
-  width: 80%;
+  width: 65%;
   height: 0.5px;
   background: currentColor;
   opacity: 0.5;
 }
 
 /* Special case for title (larger text needs adjustment) */
-.title .underline-s::after {
+.title .underline-s::after,
+.splash-title .underline-s::after {
   bottom: 0.12em;
   height: 0.5px;
   left: 10%;
-  width: 60%;
+  width: 50%;
 }
 
 .subtitle {
